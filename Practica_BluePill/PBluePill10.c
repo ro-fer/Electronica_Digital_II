@@ -3,8 +3,8 @@ Electronica Digital II
 2do Cuatrimestre 2024
 Fernandez, Rocio 
 Guía 2 :  Primeros pasos con Blue Pill
-Ejercicio 8:
-Implementar el punto 5 pero utilizando interrupciones externas.
+Ejercicio 10:
+Implementar en C de bajo nivel una función delay a la que se le pase como argumento el tiempo de retardo en ms, utilizando el SysTick y la interrupción asociada a él.
 */
 
 typedef int            int32_t;
@@ -33,10 +33,10 @@ typedef unsigned char  uint8_t;
 #define LOAD_OFFSET      0x04
 #define VAL_OFFSET       0x08
 #define CAL_OFFSET       0x0C
-#define SYSTICK_CTRL     (*(volatile uint32_t *)(SYSTICK_BASE + CTRL_OFFSET)) // Registro de control de SysTick
-#define SYSTICK_LOAD     (*(volatile uint32_t *)(SYSTICK_BASE + LOAD_OFFSET)) // Registro de carga de SysTick
-#define SYSTICK_VAL      (*(volatile uint32_t *)(SYSTICK_BASE + VAL_OFFSET)) // Registro de valor actual de SysTick
-#define SYSTICK_CAL      (*(volatile uint32_t *)(SYSTICK_BASE + CAL_OFFSET))
+#define SYSTICK_CTRL     (SYSTICK_BASE + CTRL_OFFSET) // Registro de control de SysTick
+#define SYSTICK_LOAD     (SYSTICK_BASE + LOAD_OFFSET) // Registro de carga de SysTick
+#define SYSTICK_VAL      (SYSTICK_BASE + VAL_OFFSET) // Registro de valor actual de SysTick
+#define SYSTICK_CAL      (SYSTICK_BASE + CAL_OFFSET)
 
 //Todos los offsets de los registros de GPIO
 #define CRL_OFFSET 0x00
@@ -74,18 +74,34 @@ typedef unsigned char  uint8_t;
 #define EXTICR2_OFFSET 0x0C
 #define EXTICR3_OFFSET 0x10
 
+//Creo la variable global i
+volatile int i=0;
 int main(void);
-void handler_systick(void){};
+void handler_systick(void){
+    i++;
+};
 void handler_adc1_2(void){};
 void handler_usart1(void){};
 void handler_exti0(void);
 
+//Funcion de delay
+
+void delay_ms(int ms) {
+    int Recarga_Systick = *(int*)(SYSTICK_LOAD); //Guardo el valor de lo que cuenta el systick
+    int Clock_Systick = 8E6; // Guardo el valor de la fuente del clock del systick, en este caso es el del procesador -> 8MHz
+    ms= ((ms)/ (((Recarga_Systick)/Clock_Systick)*1000)); 
+    /*Como quiero dividir "ms" por el valor en ms y la recarga/clock me da en segundos, multiplico por 1000 y guardo todo en la variable que le pase. Necesito tener "ms" en seg por eso lo convierto*/
+    i=0;
+    while (i<ms);
+}
+
+/*
 void delay_ms(int ms) {
     for (int i = 0; i < ms * 1000; i++) {
         __asm__("nop"); // No-operation, simplemente espera
     }
 }
-
+*/
 
 typedef void(*interrupt_t)(void);
 const interrupt_t vector_table[] __attribute__ ((section(".vtab"))) = {
@@ -155,58 +171,48 @@ volatile int flag=0;
         *EXTI_PR = (1<<0);
     }
 
+
 int main(void){
-    /*
-    Pasos para realizar una interrupción externa
-    */
-    //Habilito la interrupcion proveniente del EXTI0 IRQ_EXTI0=6
-    int *NVIC_ISER0 = (int*)(NVIC_BASE + ISER0_OFFSET);
-    *NVIC_ISER0 = (1<<6);
-    //Primero que nada hay que habilitar el reloj del periferico de entrada.
+    //Primero que nada hay que habilitar los relojes de los perifericos dentro del RCC_APB2ENR (GPIOx) que quieras usar
     
-    int *RCC_APB2ENR_clocks = (int*) (RCC_BASE + APB2ENR_OFFSET); //Creo un puntero que apunta a la direccion de los clocks de los GPIOS
+    int *RCC_APB2ENR_clocks = (int*)(RCC_BASE + APB2ENR_OFFSET); //Creo un puntero que apunta a la direccion de los clocks de los GPIOS
     // Tengo que habilitar los relojes de los puertos de GPIOS que me interese utilizar
     *RCC_APB2ENR_clocks |= (1 << 0) | (1 << 2) | (1 << 4); // AFIO, GPIOA, GPIOC
+    //Ahora tengo que configurar los pines del puerto que voy a usar como entrada/salida y con que configuracion.
+    // Si voy a usar los puertos del 0 al 7....
+    int *GPIOC_LowPorts = (int*)(GPIO_PORT_C_BASE + CRL_OFFSET); // puntero los puertos del 0 al 7 
+    //Si voy a usar los pines del 8 al 15...
+   // Configurar PC13 como salida push-pull a 50MHz
+	int *GPIOC_HighPorts = (int*)(GPIO_PORT_C_BASE + CRH_OFFSET); // Puntero a CRH (pines 8-15)
+	*GPIOC_HighPorts &= ~(0xF << 20);  // Limpiar los bits de configuración de PC13 (bits 20-23)
+	*GPIOC_HighPorts |= (0x3 << 20);   // Configurar PC13 como salida push-pull a 50MHz
 
-    int *GPIOC_HighPorts = (int*)(GPIO_PORT_C_BASE + CRH_OFFSET); // puntero a los puertos del 8 al 15
-    *GPIOC_HighPorts |= (3<<20); //Por ej aca pongo el pin C13 (led interno) en modo output 50MHz General purpouse output push-pull
-
-        // configuracion de PA0 como entrada y pull down
-    int *GPIOA_LOW_PORTS = (int*)(GPIO_PORT_A_BASE + CRL_OFFSET);
-    //(*GPIOA_LOW_PORTS) = (1<<3); // Queremos poner el pin PA0 en modo input y pull down
-    (*GPIOA_LOW_PORTS) &= ~(0xF << 0); // Limpiar los primeros 4 bits del pin PA0
-    (*GPIOA_LOW_PORTS) |= (0x8 << 0);  // Configurar PA0 como entrada con pull-up/pull-down
-    
-
-    
     int *GPIO_PORT_A_ODR = (int*)(GPIO_PORT_A_BASE + ODR_OFFSET);
     //(*GPIO_PORT_A_ODR) = (0<<0); // le ponemos un cero para q sea pull down en la posicion del pin q quiero (0)
     (*GPIO_PORT_A_ODR) &= ~(1 << 0);   // Pull-down activado (ODR = 0)
-
+    //Seteo el ODR del registro C
     volatile int *GPIO_PORT_C_ODR = (int*)(GPIO_PORT_C_BASE + ODR_OFFSET);
     (*GPIO_PORT_C_ODR) = (0<<13);
+
     
-//Arranco a configurar el AFIO con el pin que quiero que reciba la interrupcion
-//HABILITO LA LINEA EXTERNA
-int *AFIO_EXTICR1 = (int*)(AFIO_BASE + EXTICR1_OFFSET);
-//int *AFIO_EXTICR1 &= ~(0xF << 0); // Limpia la configuración previa para EXTI1 (pin A0)
-(*AFIO_EXTICR1) = (0<<0); //Quiero que el PA0 =0000. Quiero habilitar que el PA0 reciba las interrupciones
+    //Systick configs de punteros
+    //Inicializo punteros a los registros de SYSTICK previamente definidos.
+    volatile int *SYSTICK_LOAD_ptr = (int*)(SYSTICK_LOAD); 
+    volatile int *SYSTICK_VAL_ptr = (int*)(SYSTICK_VAL); 
+    volatile int *SYSTICK_CTRL_ptr = (int*)(SYSTICK_CTRL); 
+    volatile int *SYSTICK_CAL_ptr = (int*)(SYSTICK_CAL); 
 
-//HABILITAR EL DISPARO POR FLANCO ASCENDENTE
-int *EXTI_RTSR =(int*)(EXTI_BASE + RTSR_OFFSET);
-*EXTI_RTSR = (1<<0); //Aca le digo que en la linea de puertos 0 va a estar el disparo ascendente.
+    //Inicializo y configuro el SysTick
+    *SYSTICK_LOAD_ptr = 8E6 ; //establesco el valor de la recarga de systick
+ 	*SYSTICK_CTRL_ptr &= ~(0xF << 0);
+    *SYSTICK_CTRL_ptr |= (1<<2);            // Elijo Reloj Interno
+   	*SYSTICK_CTRL_ptr |= (1<<1);            // Habilito Interrupciones
+    *SYSTICK_CTRL_ptr |= (1<<0);
+    //*SYSTICK_VAL_ptr = 0;                   // Reinicia el valor actual de SysTick
 
-//DESENMASCARAR LA INTERRUPCION
-int *EXTI_IMR =(int*)(EXTI_BASE + IMR_OFFSET);
-*EXTI_IMR = (1<<0); // Aca le digo que en la linea de puertos 0 la interrupcion no es enmascarada
 
-
-    while (1){
-        if (flag){
-            *GPIO_PORT_C_ODR ^= (1<<13);
-            delay_ms(500);
-            flag=0;
-            }
-    }
-    
+    delay_ms(5000);
+    *GPIO_PORT_C_ODR |= (1<<13);
+    delay_ms(1000);
+    *GPIO_PORT_C_ODR = (0<<13);
 }
